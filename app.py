@@ -1928,6 +1928,330 @@ class Database:
             return False
 
 
+import time
+from collections import defaultdict, deque
+from threading import Lock
+
+# ============== المرحلة السابعة: تحسينات الأداء والأمان المتقدم ==============
+import psutil
+
+
+class PerformanceMonitor:
+    """🚀 نظام مراقبة الأداء المباشر - المرحلة 7"""
+
+    def __init__(self):
+        self.response_times = defaultdict(deque)
+        self.memory_usage = deque(maxlen=100)
+        self.database_performance = defaultdict(list)
+        self.user_activity = defaultdict(int)
+        self.system_stats = {}
+        self._lock = Lock()
+
+        # إحصائيات مفصلة
+        self.total_requests = 0
+        self.successful_operations = 0
+        self.failed_operations = 0
+        self.start_time = time.time()
+
+    def track_response_time(self, user_id: int, operation: str, duration: float):
+        """تتبع أوقات الاستجابة لكل عملية"""
+        with self._lock:
+            # حفظ وقت الاستجابة (آخر 50 عملية لكل نوع)
+            if len(self.response_times[operation]) >= 50:
+                self.response_times[operation].popleft()
+            self.response_times[operation].append(
+                {"user_id": user_id, "duration": duration, "timestamp": time.time()}
+            )
+
+            # تحديث الإحصائيات
+            self.total_requests += 1
+            if duration < 2.0:  # العمليات السريعة (أقل من ثانيتين)
+                self.successful_operations += 1
+            else:
+                self.failed_operations += 1
+
+            logger.info(
+                f"📊 [Performance] {operation} للمستخدم {user_id}: {duration:.2f}s"
+            )
+
+    def monitor_memory_usage(self):
+        """مراقبة استخدام الذاكرة"""
+        try:
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_percent = process.memory_percent()
+
+            memory_data = {
+                "rss": memory_info.rss / 1024 / 1024,  # MB
+                "vms": memory_info.vms / 1024 / 1024,  # MB
+                "percent": memory_percent,
+                "timestamp": time.time(),
+            }
+
+            with self._lock:
+                self.memory_usage.append(memory_data)
+
+            # تحذير إذا زادت الذاكرة عن 80%
+            if memory_percent > 80:
+                logger.warning(
+                    f"⚠️ [Performance] استخدام ذاكرة عالي: {memory_percent:.1f}%"
+                )
+
+            return memory_data
+        except Exception as e:
+            logger.error(f"❌ [Performance] خطأ في مراقبة الذاكرة: {e}")
+            return None
+
+    def track_database_performance(self, query_type: str, duration: float):
+        """تتبع أداء قاعدة البيانات"""
+        with self._lock:
+            self.database_performance[query_type].append(
+                {"duration": duration, "timestamp": time.time()}
+            )
+
+            # حفظ آخر 100 استعلام لكل نوع
+            if len(self.database_performance[query_type]) > 100:
+                self.database_performance[query_type] = self.database_performance[
+                    query_type
+                ][-100:]
+
+    def get_performance_stats(self) -> dict:
+        """الحصول على إحصائيات الأداء الحالية"""
+        with self._lock:
+            uptime = time.time() - self.start_time
+
+            # متوسط أوقات الاستجابة
+            avg_response_times = {}
+            for operation, times in self.response_times.items():
+                if times:
+                    avg_time = sum(t["duration"] for t in times) / len(times)
+                    avg_response_times[operation] = f"{avg_time:.2f}s"
+
+            # استخدام الذاكرة الحالي
+            current_memory = self.memory_usage[-1] if self.memory_usage else None
+
+            # إحصائيات قاعدة البيانات
+            db_stats = {}
+            for query_type, queries in self.database_performance.items():
+                if queries:
+                    avg_db_time = sum(q["duration"] for q in queries) / len(queries)
+                    db_stats[query_type] = f"{avg_db_time:.3f}s"
+
+            return {
+                "uptime_hours": f"{uptime / 3600:.1f}h",
+                "total_requests": self.total_requests,
+                "success_rate": f"{(self.successful_operations / max(self.total_requests, 1)) * 100:.1f}%",
+                "avg_response_times": avg_response_times,
+                "memory_usage": current_memory,
+                "database_performance": db_stats,
+                "active_users": len(self.user_activity),
+            }
+
+
+class AdvancedSecuritySystem:
+    """🔒 نظام الأمان المتقدم - المرحلة 7"""
+
+    def __init__(self):
+        self.suspicious_activities = defaultdict(list)
+        self.rate_limits = defaultdict(deque)
+        self.security_events = deque(maxlen=1000)
+        self._lock = Lock()
+
+        # إعدادات الحماية
+        self.MAX_REQUESTS_PER_MINUTE = 30
+        self.SUSPICIOUS_THRESHOLD = 5
+        self.BLOCK_DURATION = 300  # 5 دقائق
+        self.blocked_users = {}
+
+    def detect_suspicious_activity(
+        self, user_id: int, action: str, details: str = ""
+    ) -> bool:
+        """كشف النشاط المشبوه"""
+        current_time = time.time()
+
+        with self._lock:
+            # فحص معدل الطلبات
+            user_requests = self.rate_limits[user_id]
+
+            # إزالة الطلبات القديمة (أكثر من دقيقة)
+            while user_requests and current_time - user_requests[0] > 60:
+                user_requests.popleft()
+
+            # إضافة الطلب الحالي
+            user_requests.append(current_time)
+
+            # فحص إذا تجاوز الحد المسموح
+            if len(user_requests) > self.MAX_REQUESTS_PER_MINUTE:
+                self._log_security_event(
+                    user_id,
+                    "rate_limit_exceeded",
+                    f"تجاوز {len(user_requests)} طلب في الدقيقة",
+                )
+                return True
+
+            # كشف أنماط مشبوهة
+            suspicious_patterns = [
+                action == "registration_spam",
+                action == "payment_manipulation",
+                action == "admin_command_attempt",
+                "bot" in details.lower(),
+                "script" in details.lower(),
+            ]
+
+            if any(suspicious_patterns):
+                self.suspicious_activities[user_id].append(
+                    {"action": action, "details": details, "timestamp": current_time}
+                )
+
+                # إذا وصل للعتبة المشبوهة
+                if (
+                    len(self.suspicious_activities[user_id])
+                    >= self.SUSPICIOUS_THRESHOLD
+                ):
+                    self._block_user_temporarily(user_id)
+                    return True
+
+            return False
+
+    def _log_security_event(self, user_id: int, event_type: str, details: str):
+        """تسجيل أحداث الأمان"""
+        event = {
+            "user_id": user_id,
+            "event_type": event_type,
+            "details": details,
+            "timestamp": time.time(),
+            "severity": "high" if "exceeded" in event_type else "medium",
+        }
+
+        self.security_events.append(event)
+        logger.warning(f"🔒 [Security] {event_type} للمستخدم {user_id}: {details}")
+
+    def _block_user_temporarily(self, user_id: int):
+        """حظر مؤقت للمستخدم المشبوه"""
+        block_until = time.time() + self.BLOCK_DURATION
+        self.blocked_users[user_id] = block_until
+
+        logger.error(
+            f"🚫 [Security] حظر مؤقت للمستخدم {user_id} لمدة {self.BLOCK_DURATION/60:.1f} دقيقة"
+        )
+
+    def is_user_blocked(self, user_id: int) -> bool:
+        """فحص إذا كان المستخدم محظور"""
+        if user_id not in self.blocked_users:
+            return False
+
+        if time.time() > self.blocked_users[user_id]:
+            del self.blocked_users[user_id]  # انتهت فترة الحظر
+            return False
+
+        return True
+
+    def enhanced_data_validation(self, data: str, data_type: str) -> dict:
+        """تحقق محسن من البيانات"""
+        validation_result = {"is_valid": True, "issues": [], "security_score": 100}
+
+        # فحص طول البيانات
+        if len(data) > 1000:
+            validation_result["issues"].append("البيانات طويلة جداً")
+            validation_result["security_score"] -= 20
+
+        # فحص أحرف مشبوهة
+        suspicious_chars = ["<", ">", "&", '"', "'", "javascript:", "script"]
+        for char in suspicious_chars:
+            if char in data.lower():
+                validation_result["issues"].append(f"حرف مشبوه: {char}")
+                validation_result["security_score"] -= 15
+
+        # فحص أنماط SQL injection
+        sql_patterns = ["union", "select", "drop", "delete", "insert", "update"]
+        for pattern in sql_patterns:
+            if pattern in data.lower():
+                validation_result["issues"].append(f"نمط SQL مشبوه: {pattern}")
+                validation_result["security_score"] -= 25
+
+        validation_result["is_valid"] = validation_result["security_score"] >= 70
+        return validation_result
+
+
+class SmartNotificationSystem:
+    """🔔 نظام الإشعارات الذكية - المرحلة 7"""
+
+    def __init__(self):
+        self.user_preferences = defaultdict(dict)
+        self.notification_queue = defaultdict(list)
+        self.notification_history = defaultdict(deque)
+        self._lock = Lock()
+
+        # إعدادات افتراضية
+        self.default_preferences = {
+            "registration_reminders": True,
+            "payment_confirmations": True,
+            "security_alerts": True,
+            "system_updates": False,
+            "promotional": False,
+        }
+
+    def set_user_preferences(self, user_id: int, preferences: dict):
+        """تعيين تفضيلات المستخدم للإشعارات"""
+        with self._lock:
+            self.user_preferences[user_id] = {**self.default_preferences, **preferences}
+
+        logger.info(f"🔔 [Notifications] تم تحديث تفضيلات المستخدم {user_id}")
+
+    def should_send_notification(self, user_id: int, notification_type: str) -> bool:
+        """فحص إذا كان يجب إرسال الإشعار للمستخدم"""
+        user_prefs = self.user_preferences.get(user_id, self.default_preferences)
+        return user_prefs.get(notification_type, True)
+
+    def queue_notification(
+        self,
+        user_id: int,
+        notification_type: str,
+        message: str,
+        priority: str = "normal",
+    ):
+        """إضافة إشعار لقائمة الانتظار"""
+        if not self.should_send_notification(user_id, notification_type):
+            return False
+
+        notification = {
+            "type": notification_type,
+            "message": message,
+            "priority": priority,
+            "timestamp": time.time(),
+            "status": "queued",
+        }
+
+        with self._lock:
+            if priority == "high":
+                self.notification_queue[user_id].insert(0, notification)
+            else:
+                self.notification_queue[user_id].append(notification)
+
+        logger.info(
+            f"🔔 [Notifications] إشعار جديد للمستخدم {user_id}: {notification_type}"
+        )
+        return True
+
+    def get_notification_stats(self) -> dict:
+        """إحصائيات الإشعارات"""
+        with self._lock:
+            total_queued = sum(len(queue) for queue in self.notification_queue.values())
+            total_users = len(self.user_preferences)
+
+            return {
+                "queued_notifications": total_queued,
+                "registered_users": total_users,
+                "notification_types": list(self.default_preferences.keys()),
+            }
+
+
+# إنشاء نماذج عامة للأنظمة الجديدة
+performance_monitor = PerformanceMonitor()
+security_system = AdvancedSecuritySystem()
+notification_system = SmartNotificationSystem()
+
+
 # ================================ لوحات المفاتيح ================================
 class Keyboards:
     """لوحات المفاتيح"""
@@ -3568,6 +3892,16 @@ class FC26SmartBot:
         logger.info(f"📊 إجمالي Workers الآن: {1+2+2+3+1+2+2} = 13 worker")
         logger.info(f"🎯 AdminHandler مع كاش ذكي لـ 100 استعلام")
 
+        # ============== المرحلة السابعة: تفعيل الأنظمة المتقدمة ==============
+        self.performance_monitor = performance_monitor
+        self.security_system = security_system
+        self.notification_system = notification_system
+
+        logger.info("🚀 [Stage 7] تم تفعيل نظام مراقبة الأداء المتقدم")
+        logger.info("🔒 [Stage 7] تم تفعيل نظام الأمان المتقدم")
+        logger.info("🔔 [Stage 7] تم تفعيل نظام الإشعارات الذكية")
+        logger.info("✨ [Stage 7] جميع الأنظمة المتقدمة نشطة ومتصلة!")
+
     def get_user_lock(self, user_id: int) -> threading.Lock:
         """الحصول على قفل خاص بالمستخدم"""
         with self.locks_lock:
@@ -4347,11 +4681,25 @@ class FC26SmartBot:
 
     async def start(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """أمر البداية مع النظام الذكي الموحد"""
+        start_time = time.time()  # 🚀 مراقبة الأداء
         telegram_id = update.effective_user.id
+        user_name = update.effective_user.first_name or "مستخدم"
 
         # إذا كان هناك callback_query، نتجاهل الطلب (منع التكرار)
         if update.callback_query:
             return
+
+        # 🔒 فحص الأمان المتقدم
+        if self.security_system.is_user_blocked(telegram_id):
+            await update.message.reply_text(
+                "🚫 تم حظرك مؤقتاً بسبب نشاط مشبوه.\n" "⏰ حاول مرة أخرى لاحقاً."
+            )
+            return
+
+        # تسجيل النشاط الأمني
+        self.security_system.detect_suspicious_activity(
+            telegram_id, "start_command", f"مستخدم: {user_name}"
+        )
 
         user = self.db.get_user_by_telegram_id(telegram_id)
 
@@ -4424,10 +4772,38 @@ class FC26SmartBot:
             # مستخدم جديد - استخدام النظام الذكي للتسجيل
             await self.registration_handler.start(update, context)
 
+        # 🚀 تسجيل أداء العملية (المرحلة 7)
+        duration = time.time() - start_time
+        self.performance_monitor.track_response_time(
+            telegram_id, "start_command", duration
+        )
+
+        # 🔔 إرسال إشعار ترحيب ذكي
+        if not update.callback_query:  # منع التكرار
+            self.notification_system.queue_notification(
+                telegram_id,
+                "system_updates",
+                f"مرحباً {user_name}! تم تشغيل البوت بنجاح",
+                "low",
+            )
+
     async def profile_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
         """عرض الملف الشخصي مع النظام الذكي"""
+        start_time = time.time()  # 🚀 مراقبة الأداء
         telegram_id = update.effective_user.id
+
+        # 🔒 فحص الأمان
+        if self.security_system.is_user_blocked(telegram_id):
+            await update.message.reply_text("🚫 تم حظرك مؤقتاً.")
+            return
+
+        # تتبع أداء قاعدة البيانات
+        db_start = time.time()
         profile = self.db.get_user_profile(telegram_id)
+        db_duration = time.time() - db_start
+        self.performance_monitor.track_database_performance(
+            "get_user_profile", db_duration
+        )
 
         if not profile:
             await smart_message_manager.send_new_active_message(
@@ -4492,6 +4868,12 @@ class FC26SmartBot:
 
         await smart_message_manager.send_new_active_message(
             update, context, profile_text, reply_markup=reply_markup
+        )
+
+        # 🚀 تسجيل أداء العملية (المرحلة 7)
+        duration = time.time() - start_time
+        self.performance_monitor.track_response_time(
+            telegram_id, "profile_command", duration
         )
 
     async def help_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -6262,6 +6644,8 @@ class FC26SmartBot:
         app.add_handler(
             CommandHandler("phase4_stats", self.get_phase_four_threading_stats)
         )
+        # 🚀 أمر إحصائيات المرحلة السابعة للأدمن فقط
+        app.add_handler(CommandHandler("stage7_stats", self.get_stage_seven_stats))
         # أمر حذف الحساب للأدمن فقط
         app.add_handler(CommandHandler("delete", self.delete_account_command))
 
@@ -6422,6 +6806,65 @@ class FC26SmartBot:
         logger.info(
             f"🎯 تم تنظيف {cleaned_pools}/7 ThreadPools بنجاح - إجمالي 37 worker"
         )
+
+    async def get_stage_seven_stats(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ):
+        """📊 إحصائيات المرحلة السابعة المتقدمة - للأدمن فقط"""
+        telegram_id = update.effective_user.id
+
+        # فحص صلاحية الأدمن
+        if telegram_id != ADMIN_ID:
+            await update.message.reply_text("❌ هذا الأمر للأدمن فقط!")
+            return
+
+        try:
+            # جمع إحصائيات الأداء
+            performance_stats = self.performance_monitor.get_performance_stats()
+
+            # مراقبة الذاكرة الحالية
+            memory_stats = self.performance_monitor.monitor_memory_usage()
+
+            # إحصائيات الإشعارات
+            notification_stats = self.notification_system.get_notification_stats()
+
+            # إحصائيات الأمان
+            blocked_users_count = len(self.security_system.blocked_users)
+            security_events_count = len(self.security_system.security_events)
+
+            # تكوين الرسالة
+            stats_message = f"""🚀 **إحصائيات المرحلة 7 المتقدمة**
+━━━━━━━━━━━━━━━━━━━━━━
+
+📊 **الأداء العام:**
+⏱️ وقت التشغيل: {performance_stats.get('uptime_hours', 'غير محدد')}
+📈 إجمالي الطلبات: {performance_stats.get('total_requests', 0)}
+✅ معدل النجاح: {performance_stats.get('success_rate', '0%')}
+👥 المستخدمين النشطين: {performance_stats.get('active_users', 0)}
+
+💾 **استخدام الذاكرة:**
+🔢 الذاكرة المستخدمة: {memory_stats['rss']:.1f} MB
+📊 النسبة المئوية: {memory_stats['percent']:.1f}%
+
+🔒 **الأمان:**
+🚫 مستخدمين محظورين: {blocked_users_count}
+⚠️ أحداث أمنية: {security_events_count}
+
+🔔 **الإشعارات:**
+📬 إشعارات منتظرة: {notification_stats.get('queued_notifications', 0)}
+👤 مستخدمين مسجلين: {notification_stats.get('registered_users', 0)}
+
+━━━━━━━━━━━━━━━━━━━━━━
+✨ المرحلة 7 تعمل بكامل طاقتها!"""
+
+            await update.message.reply_text(stats_message, parse_mode="Markdown")
+
+            # تسجيل استخدام الأمر
+            logger.info(f"📊 [Stage 7] الأدمن {telegram_id} عرض إحصائيات المرحلة 7")
+
+        except Exception as e:
+            logger.error(f"❌ [Stage 7] خطأ في عرض إحصائيات المرحلة 7: {e}")
+            await update.message.reply_text("❌ حدث خطأ في جمع الإحصائيات!")
 
 
 # ================================ نقطة البداية ================================
