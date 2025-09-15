@@ -1487,6 +1487,26 @@ class Database:
         conn.commit()
         conn.close()
 
+    def delete_temp_registration(self, telegram_id: int):
+        """حذف البيانات المؤقتة بعد الانتهاء"""
+        try:
+            conn = self.get_connection()
+            cursor = conn.cursor()
+
+            cursor.execute(
+                "DELETE FROM temp_registration WHERE telegram_id = ?", (telegram_id,)
+            )
+
+            conn.commit()
+            conn.close()
+
+            logger.info(f"✅ تم حذف البيانات المؤقتة للمستخدم {telegram_id}")
+
+        except Exception as e:
+            logger.error(f"❌ خطأ في حذف البيانات المؤقتة: {e}")
+            if "conn" in locals():
+                conn.close()
+
     def get_temp_registration(self, telegram_id: int) -> Optional[dict]:
         """استرجاع التسجيل المؤقت"""
         conn = self.get_connection()
@@ -3275,16 +3295,30 @@ class SmartRegistrationHandler:
                     validation_result.get("network", "")
                 )
 
-            # حفظ في قاعدة البيانات المؤقتة
+            # 🔧 إصلاح: حفظ مُحسّن في البيانات المؤقتة
             try:
                 self.db.save_temp_registration(
                     context.user_data["registration"]["telegram_id"],
                     "payment_details_entered",
-                    ConversationHandler.END,
+                    ENTERING_PAYMENT_DETAILS,  # 🔧 الخطوة الصحيحة
                     context.user_data["registration"],
                 )
+                logger.info(f"✅ تم حفظ بيانات الدفع مؤقتياً للمستخدم {user_id}")
+
             except Exception as e:
-                logger.error(f"Error saving temp registration: {e}")
+                logger.error(f"❌ خطأ في حفظ البيانات المؤقتة: {e}")
+
+                # في حالة الخطأ، أرسل رسالة خطأ واضحة
+                await smart_message_manager.send_new_active_message(
+                    update,
+                    context,
+                    """❌ حدث خطأ في حفظ بيانات الدفع!
+
+🔄 يرجى المحاولة مرة أخرى أو كتابة /start للبدء من جديد.
+
+📞 إذا استمرت المشكلة، تواصل مع الدعم الفني.""",
+                )
+                return ConversationHandler.END
 
         # 9. إعداد رسالة النجاح
         payment_name = PAYMENT_METHODS[payment_method]["name"]
@@ -3367,7 +3401,73 @@ class SmartRegistrationHandler:
             # في وضع التسجيل العادي
             reg_data = context.user_data["registration"]
             telegram_id = reg_data["telegram_id"]
+
+            # 🔧 إصلاح: التأكد من وجود جميع البيانات المطلوبة
+            required_fields = [
+                "platform",
+                "whatsapp",
+                "payment_method",
+                "payment_details",
+            ]
+            missing_fields = []
+
+            for field in required_fields:
+                if field not in reg_data or not reg_data[field]:
+                    missing_fields.append(field)
+
+            if missing_fields:
+                error_message = f"""❌ نقص في البيانات المطلوبة!
+
+المطلوب إكمال:
+{chr(10).join(['• ' + field for field in missing_fields])}
+
+يرجى البدء من جديد والتأكد من إكمال جميع الخطوات."""
+
+                await smart_message_manager.send_new_active_message(
+                    update, context, error_message
+                )
+
+                # حذف البيانات المؤقتة الناقصة
+                try:
+                    self.db.delete_temp_registration(telegram_id)
+                except:
+                    pass
+
+                return ConversationHandler.END
+
+            # محاولة إكمال التسجيل أولاً
             success = self.db.complete_registration(telegram_id, reg_data)
+
+            # إذا فشل، محاولة إنشاء مستخدم جديد
+            if not success:
+                try:
+                    user_id = self.db.create_user(
+                        telegram_id=telegram_id,
+                        username=reg_data.get("username", ""),
+                        first_name=reg_data.get("first_name", ""),
+                        platform=reg_data.get("platform", ""),
+                        whatsapp=reg_data.get("whatsapp", ""),
+                        whatsapp_network=reg_data.get("whatsapp_network", ""),
+                        payment_method=reg_data.get("payment_method", ""),
+                        payment_details=reg_data.get("payment_details", ""),
+                        payment_details_type=reg_data.get("payment_details_type", ""),
+                        payment_network=reg_data.get("payment_network", ""),
+                    )
+                    success = user_id is not None
+                    logger.info(
+                        f"🔧 تم إنشاء مستخدم جديد بدلاً من complete_registration: {telegram_id}"
+                    )
+                except Exception as e:
+                    logger.error(f"خطأ في إنشاء المستخدم: {e}")
+                    success = False
+
+            # حذف البيانات المؤقتة بعد الحفظ بنجاح
+            if success:
+                try:
+                    self.db.delete_temp_registration(telegram_id)
+                    logger.info(f"✅ تم حذف البيانات المؤقتة للمستخدم {telegram_id}")
+                except Exception as e:
+                    logger.warning(f"تحذير: لم يتم حذف البيانات المؤقتة: {e}")
 
         # الحصول على اسم المستخدم
         if update.callback_query:
@@ -3478,8 +3578,14 @@ class SmartRegistrationHandler:
 
             return ConversationHandler.END
         else:
-            # في حالة الفشل
-            error_message = "❌ حدث خطأ في حفظ البيانات. الرجاء المحاولة مرة أخرى."
+            # 🔧 إصلاح: في حالة الفشل - رسالة أوضح ومساعدة أفضل
+            error_message = """❌ حدث خطأ في حفظ البيانات!
+
+🔄 يمكنك:
+• المحاولة مرة أخرى بكتابة /start
+• التواصل مع الدعم الفني إذا استمرت المشكلة
+
+نعتذر عن الإزعاج! 🙏"""
 
             if update.callback_query:
                 await smart_message_manager.update_current_message(
@@ -3509,42 +3615,72 @@ class SmartRegistrationHandler:
                 step = temp_data["step_number"]
 
                 step_messages = {
+                    CHOOSING_PLATFORM: MESSAGES["choose_platform"],
                     ENTERING_WHATSAPP: MESSAGES["enter_whatsapp"],
                     CHOOSING_PAYMENT: MESSAGES["choose_payment"],
+                    ENTERING_PAYMENT_DETAILS: "أدخل بيانات طريقة الدفع المختارة:",
                 }
 
                 message = step_messages.get(step, "")
 
-                # عرض الرسالة المناسبة حسب الخطوة
-                if step == CHOOSING_PAYMENT:
-                    await smart_message_manager.update_current_message(
-                        update,
-                        context,
-                        message,
-                        reply_markup=Keyboards.get_payment_keyboard(),
-                    )
-                elif step == CHOOSING_PLATFORM:
+                # 🔧 إصلاح: عرض الرسالة المناسبة حسب الخطوة الصحيحة
+                if step == CHOOSING_PLATFORM:
                     await smart_message_manager.update_current_message(
                         update,
                         context,
                         message,
                         reply_markup=Keyboards.get_platform_keyboard(),
                     )
+                    return CHOOSING_PLATFORM
                 elif step == ENTERING_WHATSAPP:
-                    # للواتساب نرسل الرسالة بدون لوحة مفاتيح
                     await smart_message_manager.update_current_message(
                         update, context, message
                     )
-
+                    return ENTERING_WHATSAPP
+                elif step == CHOOSING_PAYMENT:
+                    await smart_message_manager.update_current_message(
+                        update,
+                        context,
+                        message,
+                        reply_markup=Keyboards.get_payment_keyboard(),
+                    )
+                    return CHOOSING_PAYMENT
+                elif step == ENTERING_PAYMENT_DETAILS:
+                    # عرض رسالة إدخال بيانات الدفع
+                    payment_method = context.user_data["registration"].get(
+                        "payment_method"
+                    )
+                    if payment_method:
+                        input_message = self.get_payment_instructions(payment_method)
+                        await smart_message_manager.update_current_message(
+                            update, context, input_message
+                        )
+                        return ENTERING_PAYMENT_DETAILS
+                    else:
+                        # إذا لم تكن طريقة الدفع محفوظة، ارجع لاختيار طريقة دفع
+                        await smart_message_manager.update_current_message(
+                            update,
+                            context,
+                            MESSAGES["choose_payment"],
+                            reply_markup=Keyboards.get_payment_keyboard(),
+                        )
+                        return CHOOSING_PAYMENT
                 else:
+                    # خطوة غير معروفة - ابدأ من جديد
                     await smart_message_manager.update_current_message(
-                        update, context, message
+                        update,
+                        context,
+                        "❌ حدث خطأ في تتبع التقدم. سنبدأ من جديد.",
                     )
-
-                return step
+                    # حذف البيانات المؤقتة وإعادة البداية
+                    self.db.delete_temp_registration(telegram_id)
+                    return await self.handle_new_registration(update, context)
 
         elif query.data == "restart_registration":
-            self.db.clear_temp_registration(telegram_id)
+            try:
+                self.db.delete_temp_registration(telegram_id)
+            except:
+                pass
 
             await smart_message_manager.update_current_message(
                 update,
